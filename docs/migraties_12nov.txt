@@ -1,0 +1,4 @@
+-- Toegepast in Supabase als: xyb_monitoring, monitor_aanbod_mac_scanboat, monitor_aanbod_mac_dba,
+-- xyb_taak_status_aanbod, aanbod_snapshot, service_role_rechten_aanbod, cron_ophaal_x_yachts,
+-- cron_ophaal_extra_bronnen, xyb_voys_visma_verhuizen, xyb_fase2_mail_agent.
+-- Exacte inhoud: `supabase db pull` (zie README).

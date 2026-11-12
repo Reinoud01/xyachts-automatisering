@@ -1,0 +1,9 @@
+.DS_Store
+.env
+.env.*
+supabase/.temp/
+supabase/.branches/
+*.rtf
+*sleutel*
+*secret*
+*token*
