@@ -1,5 +1,6 @@
 // Agent: verwerkt één mail uit xyb.mail_wachtrij met de skill van het proces, via de Claude API.
 // Resultaat is altijd een concept in Outlook (nooit versturen), plus regels in xyb en een categorie op de mail.
+// Schaduwmodus (agent_instellingen.schaduw): concepten en categorieën worden alleen vastgelegd in xyb.schaduw_acties.
 // Aanroep: POST {} (pg_cron, elke paar minuten) of POST {"mail_id":123} voor één bepaalde mail.
 // Secrets: ANTHROPIC_API_KEY, ENTRA_* (zie _shared/graph.ts), SHAREPOINT_SITE_ID
 import postgres from 'npm:postgres@3.4.4';
@@ -45,7 +46,16 @@ const TOOLS = [
 
 const SCHRIJF_TOEGESTAAN = /^\s*(insert\s+into|update)\s+xyb\.(onderdeel_aanvragen|occasion_leads|gebeurtenissen|klanten|klant_boten)\b/i;
 
-async function voerUit(naam: string, inv: any, mail: any): Promise<string> {
+async function schaduw(ctx: any, mail: any, soort: string, v: any) {
+  await sql`insert into xyb.schaduw_acties (run_id, mail_id, soort, mailbox, aan, onderwerp, body_html, data)
+            values (${ctx.run_id}, ${mail.mail_id}, ${soort}, ${v.mailbox ?? mail.mailbox}, ${v.aan ?? null}, ${v.onderwerp ?? null}, ${v.body_html ?? null}, ${sql.json(v)})`;
+  return JSON.stringify({ schaduw: true, vastgelegd: soort, verstuurd: false });
+}
+
+async function voerUit(naam: string, inv: any, mail: any, ctx: any): Promise<string> {
+  if (ctx.schaduw && naam === 'maak_concept_antwoord') return schaduw(ctx, mail, 'concept_antwoord', inv);
+  if (ctx.schaduw && naam === 'maak_concept') return schaduw(ctx, mail, 'concept', inv);
+  if (ctx.schaduw && naam === 'zet_categorie') return schaduw(ctx, mail, 'categorie', inv);
   switch (naam) {
     case 'lees_mail': {
       const box = inv.mailbox ?? mail.mailbox, id = inv.message_id ?? mail.graph_message_id;
@@ -165,7 +175,7 @@ Rond altijd af met het gereedschap klaar.`;
       for (const t of gebruik) {
         let uit: string;
         if (t.name === 'klaar') { klaar = t.input; uit = 'ok'; }
-        else { try { uit = await voerUit(t.name, t.input, mail); } catch (e) { uit = `Fout: ${e instanceof Error ? e.message : e}`; } }
+        else { try { uit = await voerUit(t.name, t.input, mail, { schaduw: inst.schaduw, run_id: run.run_id }); } catch (e) { uit = `Fout: ${e instanceof Error ? e.message : e}`; } }
         stappen.push({ tool: t.name, ok: !uit.startsWith('Fout'), kort: uit.slice(0, 120) });
         resultaten.push({ type: 'tool_result', tool_use_id: t.id, content: uit });
       }
@@ -174,7 +184,7 @@ Rond altijd af met het gereedschap klaar.`;
     if (!klaar) klaar = { samenvatting: 'Maximaal aantal stappen bereikt', handmatig: true };
     await sql`update xyb.mail_wachtrij set status = ${klaar.handmatig ? 'handmatig' : 'klaar'}, verwerkt_op = now(), laatste_fout = null where mail_id = ${mail.mail_id}`;
     await sql`update xyb.agent_runs set status = 'ok', klaar_op = now(), model = ${model}, tokens_in = ${tin}, tokens_uit = ${tuit},
-              kosten_usd = ${usd.toFixed(4)}, stappen = ${sql.json(stappen)}, tellingen = ${sql.json({ proces, ...klaar })} where run_id = ${run.run_id}`;
+              kosten_usd = ${usd.toFixed(4)}, stappen = ${sql.json(stappen)}, tellingen = ${sql.json({ proces, schaduw: inst.schaduw, ...klaar })} where run_id = ${run.run_id}`;
     return Response.json({ ok: true, proces, ...klaar });
   } catch (e) {
     const fout = e instanceof Error ? e.message : String(e);
