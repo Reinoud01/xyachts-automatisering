@@ -132,7 +132,7 @@ Deno.serve(async (req) => {
 
   const [mail] = mail_id
     ? await sql`update xyb.mail_wachtrij set status = 'bezig', pogingen = pogingen + 1 where mail_id = ${mail_id} returning *`
-    : await sql`select (xyb.pak_volgende_mail()).*`;
+    : await sql`select * from xyb.pak_volgende_mail()`;
   if (!mail?.mail_id) return Response.json({ ok: true, niets: true });
 
   const [run] = await sql`insert into xyb.agent_runs (taak, mail_id) values ('agent', ${mail.mail_id}) returning run_id`;
@@ -143,18 +143,25 @@ Deno.serve(async (req) => {
   let usd = 0;
 
   try {
+    // Altijd eerst sorteren met het kleine model (ook in mailboxen met één proces), behalve YachtWorld-alerts
+    // die al op afzender herkend zijn. Zo gaat alleen echte procesmail naar het grotere model.
     let proces = mail.proces;
-    if (!proces || proces === 'overig') {
+    const [bx] = await sql`select processen from xyb.mailboxen where mailbox = ${mail.mailbox}`;
+    if (proces !== 'yachtworld') {
       const [inst0] = await sql`select model_sorteer from xyb.agent_instellingen limit 1`;
-      const s = await sorteer(mail, inst0?.model_sorteer ?? 'claude-haiku-4-5');
-      proces = s.proces; usd += kosten(inst0?.model_sorteer ?? 'haiku', s.usage);
+      const s = await sorteer(mail, inst0?.model_sorteer ?? 'claude-haiku-5-5');
+      model = inst0?.model_sorteer ?? 'claude-haiku-5-5';
+      proces = s.proces; usd += kosten(model, s.usage);
       await sql`update xyb.mail_wachtrij set proces = ${proces} where mail_id = ${mail.mail_id}`;
       stappen.push({ stap: 'sorteren', proces });
     }
     const [inst] = await sql`select i.*, s.inhoud skill_tekst, s.versie from xyb.agent_instellingen i left join xyb.skills s on s.naam = i.skill where i.proces = ${proces}`;
-    if (!inst || !inst.actief || !inst.skill_tekst) {
+    const hoortBijMailbox = !bx || (bx.processen ?? []).includes(proces);
+    if (!inst || !inst.actief || !inst.skill_tekst || !hoortBijMailbox) {
+      const reden = !hoortBijMailbox ? 'proces hoort niet bij deze mailbox' : 'proces niet actief of geen skill';
       await sql`update xyb.mail_wachtrij set status = ${proces === 'overig' ? 'overgeslagen' : 'handmatig'}, verwerkt_op = now() where mail_id = ${mail.mail_id}`;
-      await sql`update xyb.agent_runs set status = 'ok', klaar_op = now(), stappen = ${sql.json(stappen)}, tellingen = ${sql.json({ proces, reden: 'proces niet actief of geen skill' })} where run_id = ${run.run_id}`;
+      await sql`update xyb.agent_runs set status = 'ok', klaar_op = now(), model = ${model}, kosten_usd = ${usd.toFixed(4)},
+                stappen = ${sql.json(stappen)}, tellingen = ${sql.json({ proces, reden })} where run_id = ${run.run_id}`;
       return Response.json({ ok: true, proces, overgeslagen: true });
     }
     model = inst.model_schrijf;
