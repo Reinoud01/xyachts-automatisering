@@ -37,7 +37,7 @@ async function gebruiker(req: Request) {
   const email = String(u.email ?? '').toLowerCase();
   if (!email) return null;
   const [g] = await sql`
-    select g.email, g.naam, g.rol, d.dealer_id, d.naam as dealer_naam
+    select g.email, g.naam, g.rol, d.dealer_id, d.naam as dealer_naam, d.taal
       from public.dealer_gebruikers g join public.dealers d using (dealer_id)
      where g.email = ${email} and g.actief and d.actief`;
   return g ?? { email, onbekend: true };
@@ -134,7 +134,7 @@ Deno.serve(async (req) => {
     if (!g) return json({ fout: 'Niet ingelogd' }, 401);
     if (g.onbekend) return json({ fout: 'Dit mailadres heeft geen toegang tot een werkbord.', email: g.email }, 403);
     const schema = g.dealer_id;
-    const wie = { email: g.email, naam: g.naam, rol: g.rol, dealer: g.dealer_naam };
+    const wie = { email: g.email, naam: g.naam, rol: g.rol, dealer: g.dealer_naam, taal: g.taal };
     if (req.method === 'GET') return json({ gebruiker: wie, ...(await lees(schema)) });
     if (req.method === 'POST') {
       if (g.rol === 'lezen') return json({ fout: 'Alleen lezen' }, 403);
